@@ -1,1 +1,24 @@
+name: Check Linux Server Hostname
 
+on:
+  workflow_dispatch: # อนุญาตให้กดรันแบบ Manual จากหน้าเว็บ GitHub ได้
+  push:
+    branches: [ "main" ]
+
+jobs:
+  check-hostname:
+    runs-on: ubuntu-latest # หรือใส่ label ของ Self-hosted runner ของคุณ
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Display Hostname Information
+        run: |
+          echo "======================================"
+          echo " Server Hostname Details"
+          echo "======================================"
+          echo "Hostname (Short) : $(hostname)"
+          echo "Hostname (FQDN)  : $(hostname -f 2>/dev/null || echo 'N/A')"
+          echo "System Info      : $(uname -a)"
+          echo "======================================"
