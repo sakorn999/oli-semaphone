@@ -1,0 +1,34 @@
+---
+- name: Audit Sudoers and Root Privilege Users
+  hosts: all
+  become: yes
+  tasks:
+
+    - name: Read main /etc/sudoers file
+      ansible.builtin.command:
+        cmd: grep -E -v '^(#|$)' /etc/sudoers
+      register: main_sudoers
+      changed_when: false
+      failed_when: false
+
+    - name: Find included files in /etc/sudoers.d/
+      ansible.builtin.find:
+        paths: /etc/sudoers.d
+        file_type: file
+      register: sudoers_d_files
+
+    - name: Read custom sudoers files in /etc/sudoers.d/
+      ansible.builtin.command:
+        cmd: "grep -E -v '^(#|$)' {{ item.path }}"
+      loop: "{{ sudoers_d_files.files }}"
+      register: extra_sudoers
+      changed_when: false
+      failed_when: false
+
+    - name: Display Users with Root/Su Access
+      ansible.builtin.debug:
+        msg:
+          - "=== Main Sudoers Config (/etc/sudoers) ==="
+          - "{{ main_sudoers.stdout_lines | default(['No rules found']) }}"
+          - "=== Custom Sudoers Configs (/etc/sudoers.d/) ==="
+          - "{{ extra_sudoers.results | map(attribute='stdout_lines') | list }}"
