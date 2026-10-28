@@ -1,0 +1,29 @@
+#!/bin/bash
+
+# รายชื่อ Server IP ที่ต้องการตรวจสอบ
+SERVERS=("10.100.1.50" "10.100.1.86")
+
+# กำหนด SSH user (ปรับเปลี่ยนตาม user ที่มีสิทธิ์アクセス)
+SSH_USER="angel"
+
+echo "=========================================="
+echo " Starting Account Audit on Target Servers"
+echo "=========================================="
+
+for IP in "${SERVERS[@]}"; do
+    echo ""
+    echo "[+] Checking Server: $IP"
+    echo "------------------------------------------"
+    
+    # เชื่อมต่อผ่าน SSH และอ่านคอลัมน์แรก (username) จาก /etc/passwd
+    ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=ask "${SSH_USER}@${IP}" "cut -d: -f1 /etc/passwd" 2>/dev/null
+
+    if [ $? -ne 0 ]; then
+        echo "[!] Error: Failed to connect to $IP"
+    fi
+done
+
+echo ""
+echo "=========================================="
+echo " Audit Completed"
+echo "=========================================="
