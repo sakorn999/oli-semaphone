@@ -6,7 +6,7 @@
 # รับค่า SSH Key จาก Semaphore UI (ผ่าน Secret/Extra variables)
 SSH_KEY_CONTENT="${DEPLOY_KEY}"
 
-# กำหนด SSH User
+# กำหนด SSH User เป็น angel
 SSH_USER="angel"
 
 # กำหนด Target IP
@@ -32,13 +32,9 @@ fi
 trap 'rm -f "$TEMP_KEY_FILE"' EXIT
 
 # ==========================================
-# SSH Options (เพิ่มการรองรับ ssh-rsa/ssh-dss สำหรับ OS รุ่นเก่า)
+# SSH Options (แก้ไขเรื่อง Key Types สำหรับ OS รุ่นเก่า)
 # ==========================================
-SSH_OPTIONS="-o StrictHostKeyChecking=no \
-             -o ConnectTimeout=5 \
-             -o BatchMode=yes \
-             -o HostKeyAlgorithms=+ssh-rsa,ssh-dss \
-             -o PubkeyAcceptedKeyTypes=+ssh-rsa"
+SSH_OPTIONS="-o StrictHostKeyChecking=no -o ConnectTimeout=5 -o BatchMode=yes -o HostKeyAlgorithms=+ssh-rsa,+ssh-dss -o PubkeyAcceptedKeyTypes=+ssh-rsa,+ssh-dss"
 
 # ==========================================
 # Execution
@@ -47,7 +43,7 @@ SUDOERS_FILE="${OUTPUT_DIR}/${TARGET_IP}_sudoers.txt"
 PASSWD_FILE="${OUTPUT_DIR}/${TARGET_IP}_passwd.txt"
 
 echo "=================================================="
-echo "Connecting to ${TARGET_IP}..."
+echo "Connecting to ${TARGET_IP} as user ${SSH_USER}..."
 echo "=================================================="
 
 # 1. อ่านไฟล์ /etc/sudoers
