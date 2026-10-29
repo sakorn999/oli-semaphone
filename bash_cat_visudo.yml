@@ -1,17 +1,37 @@
 ---
-- name: Query visudo on target servers
-  hosts: all
+- name: Run Native Bash Script from Semaphore Runner
+  hosts: localhost
+  connection: local
   gather_facts: no
-  become: yes          # ใช้สิทธิ์ root/sudo ในการรัน visudo
 
   tasks:
-    - name: Check visudo syntax and read sudoers
+    - name: Execute Bash script on target servers via direct SSH
       ansible.builtin.shell: |
-        visudo -c
-        echo "=== Active Sudoers Rules ==="
-        grep -v '^[[:space:]]*#' /etc/sudoers | grep -v '^[[:space:]]*$'
-      register: visudo_output
+        # 1. สร้าง SSH Key ชั่วคราวจาก Variable Group
+        TMP_KEY=$(mktemp)
+        echo "$DEPLOY_KEY" > "$TMP_KEY"
+        chmod 600 "$TMP_KEY"
+        trap 'rm -f "$TMP_KEY"' EXIT
 
-    - name: Print output
+        # 2. ดึง IP จากไฟล์ Inventory ของ Semaphore
+        INVENTORY_FILE="{{ lookup('env', 'SEMAPHORE_INVENTORY_FILE') }}"
+        HOSTS=$(grep -E -o '([0-9]{1,3}\.){3}[0-9]{1,3}' "$INVENTORY_FILE" | sort -u)
+
+        # 3. วนลูป SSH ไป Query แต่ละเครื่องด้วย Pure Bash
+        for HOST in $HOSTS; do
+            echo "=========================================="
+            echo "Querying visudo on: $HOST"
+            echo "=========================================="
+            ssh -i "$TMP_KEY" \
+                -o StrictHostKeyChecking=no \
+                -o ConnectTimeout=5 \
+                "root@${HOST}" \
+                "sudo visudo -c && echo '--- Sudoers Rules ---' && sudo grep -v '^[[:space:]]*#' /etc/sudoers | grep -v '^[[:space:]]*$'" \
+                || echo "[ERROR] Connect or Query failed on $HOST"
+            echo ""
+        done
+      register: bash_result
+
+    - name: Display Output
       ansible.builtin.debug:
-        var: visudo_output.stdout_lines
+        msg: "{{ bash_result.stdout_lines }}"
