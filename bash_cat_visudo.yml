@@ -1,36 +1,17 @@
-#!/bin/bash
+---
+- name: Query visudo on target servers
+  hosts: all
+  gather_facts: no
+  become: yes          # ใช้สิทธิ์ root/sudo ในการรัน visudo
 
-# Exit ทันทีหากมีข้อผิดพลาด
-set -e
+  tasks:
+    - name: Check visudo syntax and read sudoers
+      ansible.builtin.shell: |
+        visudo -c
+        echo "=== Active Sudoers Rules ==="
+        grep -v '^[[:space:]]*#' /etc/sudoers | grep -v '^[[:space:]]*$'
+      register: visudo_output
 
-# 1. ตรวจสอบว่ามีการส่งผ่าน DEPLOY_KEY มาจาก Environment หรือไม่
-if [ -z "$DEPLOY_KEY" ]; me
-    echo "[ERROR] ไม่พบตัวแปร DEPLOY_KEY กรุณาตรวจสอบการเลือก Variable Group"
-    exit 1
-fi
-
-# 2. ระบุข้อมูลเครื่องปลายทาง (เปลี่ยนค่า IP และ USER ตรงนี้)
-TARGET_USER="root"          # หรือใช้ user อื่นที่มีสิทธิ์ sudo แบบ nopasswd
-TARGET_HOST="10.100.1.50"  # เปลี่ยนเป็น IP ปลายทางของคุณ
-
-# 3. สร้างไฟล์ SSH Key ชั่วคราว
-TMP_KEY=$(mktemp)
-echo "$DEPLOY_KEY" > "$TMP_KEY"
-chmod 600 "$TMP_KEY"
-
-# ฟังก์ชันลบไฟล์ Key ชั่วคราวเมื่อ Script ทำงานเสร็จ
-cleanup() {
-    rm -f "$TMP_KEY"
-}
-trap cleanup EXIT
-
-echo "=== กำลังทดสอบเชื่อมต่อและ Query ข้อมูล visudo จาก $TARGET_HOST ==="
-
-# 4. SSH เข้าไปรันคำสั่ง visudo -c (ตรวจ Syntax) และ cat /etc/sudoers
-ssh -i "$TMP_KEY" \
-    -o StrictHostKeyChecking=no \
-    -o ConnectTimeout=10 \
-    "${TARGET_USER}@${TARGET_HOST}" \
-    "echo '--- [1] Checking sudoers file syntax ---' && sudo visudo -c && echo '--- [2] Active sudoers entries ---' && sudo grep -v '^[[:space:]]*#' /etc/sudoers | grep -v '^[[:space:]]*$'"
-
-echo "=== Query ข้อมูลสำเร็จ ==="
+    - name: Print output
+      ansible.builtin.debug:
+        var: visudo_output.stdout_lines
