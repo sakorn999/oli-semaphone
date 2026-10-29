@@ -3,68 +3,73 @@
 # ==========================================
 # Configuration Settings
 # ==========================================
-# รับค่า SSH Key จาก Semaphore UI (ผ่าน Secret/Extra variables)
-# หาก Semaphore ส่งเข้ามาเป็น Base64 หรือ String ปกติ Script จะจัดการสร้าง Temp File ให้
+# รับค่า SSH Key จาก Semaphore UI (ผ่าน Secret/Extra variables)[cite: 1]
 SSH_KEY_CONTENT="${DEPLOY_KEY}"
 
 # กำหนด SSH User
 SSH_USER="your_ssh_user"
 
-# ช่วง IP Target
-IP_PREFIX="10.100.1"
-START_IP=1
-END_IP=254
+# กำหนด Target IP
+TARGET_IP="10.100.1.50"
 
 # โฟลเดอร์สำหรับเก็บ Output
-OUTPUT_DIR="./visudo_logs"
+OUTPUT_DIR="./server_logs"
 mkdir -p "$OUTPUT_DIR"
 
 # ==========================================
 # SSH Key Management (Temporary File)
 # ==========================================
-# สร้างไฟล์ชั่วคราวปลอดภัยสำหรับเก็บ Private Key
 TEMP_KEY_FILE=$(mktemp)
 chmod 600 "$TEMP_KEY_FILE"
 
-# ตรวจสอบว่า SSH Key มีการขึ้นต้นด้วย -----BEGIN หรือไม่
 if [[ "$SSH_KEY_CONTENT" == *"BEGIN"* ]]; then
     echo "$SSH_KEY_CONTENT" > "$TEMP_KEY_FILE"
 else
-    # หากตั้งค่าแบบ Encode Base64 ไว้ใน Semaphore
     echo "$SSH_KEY_CONTENT" | base64 -d > "$TEMP_KEY_FILE" 2>/dev/null || echo "$SSH_KEY_CONTENT" > "$TEMP_KEY_FILE"
 fi
 
-# ลบไฟล์ Key ชั่วคราวเมื่อ Script ทำงานจบ (ทั้งแบบปกติ หรือโดนยกเลิก)
+# ลบไฟล์ Key ชั่วคราวเมื่อทำงานเสร็จ
 trap 'rm -f "$TEMP_KEY_FILE"' EXIT
 
-# ตัวเลือก SSH Option
-SSH_OPTIONS="-o StrictHostKeyChecking=no -o ConnectTimeout=3 -o BatchMode=yes"
-
-echo "=================================================="
-echo "Starting visudo extraction from ${IP_PREFIX}.${START_IP} to ${IP_PREFIX}.${END_IP}"
-echo "=================================================="
+SSH_OPTIONS="-o StrictHostKeyChecking=no -o ConnectTimeout=5 -o BatchMode=yes"
 
 # ==========================================
-# Execution Loop
+# Execution
 # ==========================================
-for i in $(seq $START_IP $END_IP); do
-    TARGET_IP="${IP_PREFIX}.${i}"
-    OUTPUT_FILE="${OUTPUT_DIR}/${TARGET_IP}.txt"
-    
-    echo -n "Connecting to ${TARGET_IP} ... "
-    
-    # รัน SSH โดยระบุ Identity File เป็น Temp Key
-    # ใช้ sudo -n (non-interactive) เพื่ออ่าน /etc/sudoers
-    ssh $SSH_OPTIONS -i "$TEMP_KEY_FILE" "${SSH_USER}@${TARGET_IP}" "sudo -n cat /etc/sudoers" > "$OUTPUT_FILE" 2>&1
-    
-    if [ $? -eq 0 ]; then
-        echo "[SUCCESS] Saved to ${OUTPUT_FILE}"
-    else
-        echo "[FAILED] Connection error or sudo permission denied"
-        mv "$OUTPUT_FILE" "${OUTPUT_FILE}.error"
-    fi
-done
+SUDOERS_FILE="${OUTPUT_DIR}/${TARGET_IP}_sudoers.txt"
+PASSWD_FILE="${OUTPUT_DIR}/${TARGET_IP}_passwd.txt"
 
 echo "=================================================="
-echo "Task completed. Results saved in ${OUTPUT_DIR}"
+echo "Connecting to ${TARGET_IP}..."
 echo "=================================================="
+
+# 1. อ่านไฟล์ /etc/sudoers (ต้องใช้ sudo)
+echo -n "Reading /etc/sudoers ... "
+ssh $SSH_OPTIONS -i "$TEMP_KEY_FILE" "${SSH_USER}@${TARGET_IP}" "sudo -n cat /etc/sudoers" > "$SUDOERS_FILE" 2>&1
+if [ $? -eq 0 ]; then
+    echo "[SUCCESS]"
+else
+    echo "[FAILED] Check sudo permission"
+fi
+
+# 2. อ่านไฟล์ /etc/passwd (User ปกติอ่านได้ ไม่ต้องใช้ sudo)
+echo -n "Reading /etc/passwd ... "
+ssh $SSH_OPTIONS -i "$TEMP_KEY_FILE" "${SSH_USER}@${TARGET_IP}" "cat /etc/passwd" > "$PASSWD_FILE" 2>&1
+if [ $? -eq 0 ]; then
+    echo "[SUCCESS]"
+else
+    echo "[FAILED] Connection error"
+fi
+
+# ==========================================
+# Display Results on Console / Log
+# ==========================================
+echo ""
+echo "=================== /etc/sudoers ==================="
+cat "$SUDOERS_FILE"
+
+echo ""
+echo "=================== /etc/passwd ===================="
+cat "$PASSWD_FILE"
+
+echo "===================================================="
