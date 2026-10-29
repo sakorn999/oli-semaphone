@@ -104,9 +104,21 @@ echo "=================================================="
 echo "Connecting to ${HOST} as ${USER_SSH}..."
 echo "=================================================="
 
-if ! ssh "${SSH_OPTS[@]}" "${USER_SSH}@${HOST}" "echo ok" >/dev/null 2>"$WORK/conn.err"; then
-  echo "[FAILED] SSH login ไม่สำเร็จ:"
+if ! ssh "${SSH_OPTS[@]}" -o PreferredAuthentications=publickey "${USER_SSH}@${HOST}" "echo ok" >/dev/null 2>"$WORK/conn.err"; then
+  RC=$?
+  echo "[FAILED] SSH login ไม่สำเร็จ (exit code $RC)"
+  echo "--- ssh error ---"
   cat "$WORK/conn.err"
+  echo "--- วินิจฉัย ---"
+  ssh -V 2>&1
+  echo "fingerprint ของ key ที่โหลดใน agent (เทียบกับ authorized_keys บน server):"
+  ssh-add -l
+  echo "ผล ssh -v (กรองเฉพาะบรรทัดสำคัญ):"
+  ssh -v "${SSH_OPTS[@]}" "${USER_SSH}@${HOST}" "echo ok" 2>&1 \
+    | grep -E "Connecting to|Connection (established|timed out|refused)|Offering|Server accepts|Authentications that can continue|Permission denied|no matching|Unable to negotiate|kex_exchange|banner|Host key|Authenticated" \
+    | head -30
+  echo "--- ทดสอบ port 22 ---"
+  (timeout 5 bash -c "</dev/tcp/${HOST}/22" && echo "port 22 เปิด") 2>&1 || echo "เชื่อมต่อ port 22 ไม่ได้ (firewall/เครือข่าย)"
   exit 1
 fi
 echo "SSH login ... [OK]"
