@@ -93,8 +93,10 @@ SSH_OPTS=(-o BatchMode=yes
   -o UserKnownHostsFile=/dev/null
   -o LogLevel=ERROR
   -o ConnectTimeout=10)
-# ถ้าเครื่องปลายทางเก่ามาก (key RSA/sha1) ให้เอา comment บรรทัดล่างออก
-# SSH_OPTS+=(-o PubkeyAcceptedAlgorithms=+ssh-rsa -o HostKeyAlgorithms=+ssh-rsa)
+# เครื่องปลายทางเป็น OpenSSH 5.3 (เก่า) รองรับแค่ ssh-rsa/ssh-dss ส่วน client ใหม่ปิด ssh-rsa เป็นค่าเริ่มต้น
+SSH_OPTS+=(-o PubkeyAcceptedAlgorithms=+ssh-rsa
+  -o HostKeyAlgorithms=+ssh-rsa
+  -o KexAlgorithms=+diffie-hellman-group14-sha1,diffie-hellman-group-exchange-sha1)
 
 run_remote() {   # $1=คำสั่งบน remote  $2=ไฟล์ผลลัพธ์
   ssh "${SSH_OPTS[@]}" "${USER_SSH}@${HOST}" "$1" > "$2" 2> "$2.err"
