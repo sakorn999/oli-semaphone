@@ -3,11 +3,11 @@
 # ==========================================
 # Configuration Settings
 # ==========================================
-# รับค่า SSH Key จาก Semaphore UI (ผ่าน Secret/Extra variables)[cite: 1]
+# รับค่า SSH Key จาก Semaphore UI (ผ่าน Secret/Extra variables)
 SSH_KEY_CONTENT="${DEPLOY_KEY}"
 
 # กำหนด SSH User
-SSH_USER="your_ssh_user"
+SSH_USER="angel"
 
 # กำหนด Target IP
 TARGET_IP="10.100.1.50"
@@ -31,7 +31,14 @@ fi
 # ลบไฟล์ Key ชั่วคราวเมื่อทำงานเสร็จ
 trap 'rm -f "$TEMP_KEY_FILE"' EXIT
 
-SSH_OPTIONS="-o StrictHostKeyChecking=no -o ConnectTimeout=5 -o BatchMode=yes"
+# ==========================================
+# SSH Options (เพิ่มการรองรับ ssh-rsa/ssh-dss สำหรับ OS รุ่นเก่า)
+# ==========================================
+SSH_OPTIONS="-o StrictHostKeyChecking=no \
+             -o ConnectTimeout=5 \
+             -o BatchMode=yes \
+             -o HostKeyAlgorithms=+ssh-rsa,ssh-dss \
+             -o PubkeyAcceptedKeyTypes=+ssh-rsa"
 
 # ==========================================
 # Execution
@@ -43,7 +50,7 @@ echo "=================================================="
 echo "Connecting to ${TARGET_IP}..."
 echo "=================================================="
 
-# 1. อ่านไฟล์ /etc/sudoers (ต้องใช้ sudo)
+# 1. อ่านไฟล์ /etc/sudoers
 echo -n "Reading /etc/sudoers ... "
 ssh $SSH_OPTIONS -i "$TEMP_KEY_FILE" "${SSH_USER}@${TARGET_IP}" "sudo -n cat /etc/sudoers" > "$SUDOERS_FILE" 2>&1
 if [ $? -eq 0 ]; then
@@ -52,7 +59,7 @@ else
     echo "[FAILED] Check sudo permission"
 fi
 
-# 2. อ่านไฟล์ /etc/passwd (User ปกติอ่านได้ ไม่ต้องใช้ sudo)
+# 2. อ่านไฟล์ /etc/passwd
 echo -n "Reading /etc/passwd ... "
 ssh $SSH_OPTIONS -i "$TEMP_KEY_FILE" "${SSH_USER}@${TARGET_IP}" "cat /etc/passwd" > "$PASSWD_FILE" 2>&1
 if [ $? -eq 0 ]; then
