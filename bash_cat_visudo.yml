@@ -34,7 +34,7 @@ trap 'rm -f "$TEMP_KEY_FILE"' EXIT
 # ==========================================
 # SSH Options
 # ==========================================
-SSH_OPTIONS="-o StrictHostKeyChecking=no -o ConnectTimeout=5 -o BatchMode=yes -o HostKeyAlgorithms=ssh-rsa,ssh-dss -o PubkeyAcceptedKeyTypes=ssh-rsa,ssh-dss"
+SSH_OPTIONS="-o StrictHostKeyChecking=no -o ConnectTimeout=5 -o BatchMode=yes -o HostKeyAlgorithms=+ssh-rsa -o PubkeyAcceptedAlgorithms=+ssh-rsa"
 
 # ==========================================
 # Execution
