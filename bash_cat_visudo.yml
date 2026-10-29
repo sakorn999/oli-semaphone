@@ -127,7 +127,10 @@ echo "SSH login ... [OK]"
 
 report() {   # $1=ชื่อรายการ  $2=คำสั่ง  $3=ไฟล์ผลลัพธ์
   if run_remote "$2" "$3"; then
-    echo "$1 ... [OK] -> $3 ($(wc -l < "$3") บรรทัด)"
+    echo
+    echo "=================== $1 ==================="
+    if [ -s "$3" ]; then cat "$3"; else echo "(ว่าง / ไม่มีข้อมูล)"; fi
+    echo "[OK] ($(wc -l < "$3") บรรทัด, เก็บไว้ที่ $3)"
   else
     echo "$1 ... [FAILED]"
     sed 's/^/    /' "$3.err"
@@ -138,13 +141,11 @@ report() {   # $1=ชื่อรายการ  $2=คำสั่ง  $3=ไ�
 report "sudo -l (สิทธิ์ของ ${USER_SSH})" "sudo -n -l" "$OUT_DIR/${HOST}_sudo_l.txt"
 # เนื้อหา visudo
 report "/etc/sudoers" "sudo -n cat /etc/sudoers" "$OUT_DIR/${HOST}_sudoers.txt"
-report "/etc/sudoers.d/*" "sudo -n sh -c 'for f in /etc/sudoers.d/*; do [ -f \"\$f\" ] && { echo \"### \$f\"; cat \"\$f\"; }; done'" "$OUT_DIR/${HOST}_sudoers_d.txt"
+report "/etc/sudoers.d/*" "sudo -n sh -c 'for f in /etc/sudoers.d/*; do [ -f \"\$f\" ] && { echo \"### \$f\"; cat \"\$f\"; }; done; true'" "$OUT_DIR/${HOST}_sudoers_d.txt"
 # ตรวจ syntax ของ sudoers
 report "visudo -c" "sudo -n visudo -c" "$OUT_DIR/${HOST}_visudo_check.txt"
 # user/group ที่ได้สิทธิ์ admin
 report "groups ของ ${USER_SSH}" "id ${USER_SSH}" "$OUT_DIR/${HOST}_id.txt"
 
 echo
-echo "ผลลัพธ์เก็บไว้ที่ $OUT_DIR (ไม่ได้พิมพ์เนื้อหา sudoers ลง log เพื่อความปลอดภัย)"
-echo "สรุปสิทธิ์ของ ${USER_SSH}:"
-cat "$OUT_DIR/${HOST}_sudo_l.txt" 2>/dev/null
+echo "=================== เสร็จสิ้น ==================="
