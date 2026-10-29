@@ -1,47 +1,136 @@
 #!/usr/bin/env bash
+# Semaphore (Bash template) - อ่านสิทธิ์ sudo (visudo) บนเครื่องปลายทางผ่าน SSH
+#
+# Variable Group ที่ต้องผูกกับ template:
+#   Secrets (ชนิด Environment variable):
+#     DEPLOY_KEY      -> Key Store: Angel (ssh private key)
+#     DEPLOY_KEY_PASS -> Key Store: key แบบ "Login with password" เก็บ passphrase (ถ้า key มี passphrase)
+#   Environment (ไม่ลับ):
+#     TARGET_HOST (default 10.100.1.50), TARGET_USER (default angel)
 set -u
 
-HOST="10.100.1.50"
-USER_SSH="angel"
+HOST="${TARGET_HOST:-10.100.1.50}"
+USER_SSH="${TARGET_USER:-angel}"
 OUT_DIR="./server_logs"
 mkdir -p "$OUT_DIR"
 
-# --- เตรียม key ---
-KEY_FILE="$(mktemp)"
-trap 'rm -f "$KEY_FILE"' EXIT
-chmod 600 "$KEY_FILE"
+WORK="$(mktemp -d)"
+KEY_FILE="$WORK/key"
+cleanup() {
+  [ -n "${SSH_AGENT_PID:-}" ] && ssh-agent -k >/dev/null 2>&1
+  rm -rf "$WORK"
+}
+trap cleanup EXIT
+chmod 700 "$WORK"
 
-# แปลง \n ที่เป็นตัวอักษร -> newline จริง, ลบ \r, ลบเครื่องหมายคำพูดหัวท้าย
-printf '%s' "$DEPLOY_KEY" \
-  | sed -e 's/\\n/\n/g' -e 's/\r$//' -e 's/^"//' -e 's/"$//' > "$KEY_FILE"
-# บังคับให้มี newline ปิดท้ายไฟล์ (สำคัญ ไม่งั้น libcrypto error)
-[ -n "$(tail -c1 "$KEY_FILE")" ] && echo >> "$KEY_FILE"
-
-# ตรวจ key ก่อนใช้ ถ้าเสียจะหยุดทันทีพร้อมบอกสาเหตุ
-if ! ssh-keygen -y -f "$KEY_FILE" >/dev/null 2>&1; then
-  echo "[ERROR] DEPLOY_KEY อ่านไม่ได้ (format ผิด หรือมี passphrase)"
+# ---------- 1) เตรียม private key ----------
+if [ -z "${DEPLOY_KEY:-}" ]; then
+  echo "[ERROR] ไม่พบตัวแปร DEPLOY_KEY (ผูก Variable Group ที่มี secret ชื่อ DEPLOY_KEY หรือยัง?)"
   exit 1
 fi
 
-SSH_OPTS=(-i "$KEY_FILE"
-  -o IdentitiesOnly=yes
-  -o BatchMode=yes
+if [ -f "$DEPLOY_KEY" ]; then
+  # Semaphore ส่งมาเป็น path ของไฟล์
+  cp "$DEPLOY_KEY" "$KEY_FILE"
+else
+  # ส่งมาเป็นเนื้อหา key (อาจถูกยุบเป็นบรรทัดเดียว / มี \n ตัวอักษร / CRLF / เครื่องหมายคำพูด)
+  # -> ดึงหัว-ท้ายออกมา แล้วประกอบ key ใหม่ให้ถูกรูปแบบ
+  RAW="$DEPLOY_KEY"
+  RAW="${RAW//\\n/ }"
+  RAW="${RAW//$'\r'/ }"
+  RAW="${RAW//$'\n'/ }"
+  KEY_HEAD="$(printf '%s' "$RAW" | grep -o -E -e '-----BEGIN [A-Z ]*PRIVATE KEY-----' | head -1)"
+  KEY_FOOT="$(printf '%s' "$RAW" | grep -o -E -e '-----END [A-Z ]*PRIVATE KEY-----' | head -1)"
+  if [ -z "$KEY_HEAD" ] || [ -z "$KEY_FOOT" ]; then
+    echo "[ERROR] DEPLOY_KEY ไม่มีส่วน -----BEGIN/END ... PRIVATE KEY----- (วาง key ไม่ครบ?)"
+    exit 1
+  fi
+  RAW="${RAW//$KEY_HEAD/}"
+  RAW="${RAW//$KEY_FOOT/}"
+  KEY_BODY="$(printf '%s' "$RAW" | tr -d ' "')"
+  {
+    printf '%s\n' "$KEY_HEAD"
+    printf '%s' "$KEY_BODY" | fold -w 70
+    printf '\n%s\n' "$KEY_FOOT"
+  } > "$KEY_FILE"
+fi
+sed -i 's/\r$//' "$KEY_FILE"
+[ -n "$(tail -c1 "$KEY_FILE")" ] && echo >> "$KEY_FILE"   # ต้องมี newline ท้ายไฟล์
+chmod 600 "$KEY_FILE"
+
+# ---------- 2) ปลดล็อก passphrase (ถ้ามี) ----------
+PASS="${DEPLOY_KEY_PASS:-}"
+[ -n "$PASS" ] && [ -f "$PASS" ] && PASS="$(cat "$PASS")"   # Semaphore อาจส่งมาเป็น path ของไฟล์
+case "$PASS" in
+  *"PRIVATE KEY"*)
+    echo "[ERROR] DEPLOY_KEY_PASS เป็น private key ไม่ใช่ passphrase"
+    echo "        ให้สร้าง key แบบ 'Login with password' ใน Key Store แล้วให้ DEPLOY_KEY_PASS ชี้ไปที่ key นั้น"
+    exit 1 ;;
+esac
+if ! ssh-keygen -y -P "$PASS" -f "$KEY_FILE" >/dev/null 2>&1; then
+  echo "[ERROR] อ่าน key ไม่ได้: format ผิด หรือ passphrase ไม่ถูกต้อง"
+  exit 1
+fi
+
+eval "$(ssh-agent -s)" >/dev/null
+if [ -n "$PASS" ]; then
+  printf '#!/bin/sh\nprintf "%%s" "$KEY_PASS_ENV"\n' > "$WORK/askpass.sh"
+  chmod 700 "$WORK/askpass.sh"
+  KEY_PASS_ENV="$PASS" SSH_ASKPASS="$WORK/askpass.sh" SSH_ASKPASS_REQUIRE=force DISPLAY=none \
+    ssh-add "$KEY_FILE" </dev/null >/dev/null 2>&1
+else
+  ssh-add "$KEY_FILE" </dev/null >/dev/null 2>&1
+fi
+if ! ssh-add -l >/dev/null 2>&1; then
+  echo "[ERROR] ssh-add ไม่สำเร็จ (ตรวจ ssh -V ต้องเป็น OpenSSH 8.4+ ถ้ามี passphrase)"
+  exit 1
+fi
+rm -f "$KEY_FILE" "$WORK/askpass.sh"   # key อยู่ใน agent แล้ว ลบไฟล์ทิ้ง
+
+# ---------- 3) SSH ----------
+SSH_OPTS=(-o BatchMode=yes
   -o StrictHostKeyChecking=no
   -o UserKnownHostsFile=/dev/null
-  -o PubkeyAcceptedAlgorithms=+ssh-rsa
-  -o HostKeyAlgorithms=+ssh-rsa
+  -o LogLevel=ERROR
   -o ConnectTimeout=10)
+# ถ้าเครื่องปลายทางเก่ามาก (key RSA/sha1) ให้เอา comment บรรทัดล่างออก
+# SSH_OPTS+=(-o PubkeyAcceptedAlgorithms=+ssh-rsa -o HostKeyAlgorithms=+ssh-rsa)
 
-run_remote() {   # $1=คำสั่ง  $2=ไฟล์ output
-  ssh "${SSH_OPTS[@]}" "${USER_SSH}@${HOST}" "$1" > "$2"
+run_remote() {   # $1=คำสั่งบน remote  $2=ไฟล์ผลลัพธ์
+  ssh "${SSH_OPTS[@]}" "${USER_SSH}@${HOST}" "$1" > "$2" 2> "$2.err"
 }
 
-echo "Connecting to $HOST as $USER_SSH..."
+echo "=================================================="
+echo "Connecting to ${HOST} as ${USER_SSH}..."
+echo "=================================================="
 
-run_remote "sudo -n cat /etc/sudoers" "$OUT_DIR/${HOST}_sudoers.txt" \
-  && echo "Reading /etc/sudoers ... [OK]" \
-  || echo "Reading /etc/sudoers ... [FAILED] Check sudo permission (NOPASSWD)"
+if ! ssh "${SSH_OPTS[@]}" "${USER_SSH}@${HOST}" "echo ok" >/dev/null 2>"$WORK/conn.err"; then
+  echo "[FAILED] SSH login ไม่สำเร็จ:"
+  cat "$WORK/conn.err"
+  exit 1
+fi
+echo "SSH login ... [OK]"
 
-run_remote "cat /etc/passwd" "$OUT_DIR/${HOST}_passwd.txt" \
-  && echo "Reading /etc/passwd ... [OK]" \
-  || echo "Reading /etc/passwd ... [FAILED] Connection error"
+report() {   # $1=ชื่อรายการ  $2=คำสั่ง  $3=ไฟล์ผลลัพธ์
+  if run_remote "$2" "$3"; then
+    echo "$1 ... [OK] -> $3 ($(wc -l < "$3") บรรทัด)"
+  else
+    echo "$1 ... [FAILED]"
+    sed 's/^/    /' "$3.err"
+  fi
+}
+
+# สิทธิ์ sudo ของ user นี้ (ไม่ต้องใช้สิทธิ์พิเศษ)
+report "sudo -l (สิทธิ์ของ ${USER_SSH})" "sudo -n -l" "$OUT_DIR/${HOST}_sudo_l.txt"
+# เนื้อหา visudo
+report "/etc/sudoers" "sudo -n cat /etc/sudoers" "$OUT_DIR/${HOST}_sudoers.txt"
+report "/etc/sudoers.d/*" "sudo -n sh -c 'for f in /etc/sudoers.d/*; do [ -f \"\$f\" ] && { echo \"### \$f\"; cat \"\$f\"; }; done'" "$OUT_DIR/${HOST}_sudoers_d.txt"
+# ตรวจ syntax ของ sudoers
+report "visudo -c" "sudo -n visudo -c" "$OUT_DIR/${HOST}_visudo_check.txt"
+# user/group ที่ได้สิทธิ์ admin
+report "groups ของ ${USER_SSH}" "id ${USER_SSH}" "$OUT_DIR/${HOST}_id.txt"
+
+echo
+echo "ผลลัพธ์เก็บไว้ที่ $OUT_DIR (ไม่ได้พิมพ์เนื้อหา sudoers ลง log เพื่อความปลอดภัย)"
+echo "สรุปสิทธิ์ของ ${USER_SSH}:"
+cat "$OUT_DIR/${HOST}_sudo_l.txt" 2>/dev/null
