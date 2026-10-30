@@ -6,7 +6,7 @@
 #     DEPLOY_KEY      -> Key Store: Angel (ssh private key)
 #     DEPLOY_KEY_PASS -> Key Store: key แบบ "Login with password" เก็บ passphrase (ถ้า key มี passphrase)
 #   Environment (ไม่ลับ):
-#     TARGET_RANGE (default 10.100.1.1-10.100.1.50)  รูปแบบ: 10.100.1.1-10.100.1.50 หรือ 10.100.1.1-50
+#     TARGET_RANGE (default 10.100.2.150-10.100.2.200)  รูปแบบ: 10.100.1.1-10.100.1.50 หรือ 10.100.1.1-50
 #                  หรือเครื่องเดียว 10.100.1.50 หรือหลายช่วงคั่นด้วยเว้นวรรค/คอมมา
 #     TARGET_USER  (default angel)
 #     SHOW_FULL    (default 1) 1=พิมพ์เนื้อหา sudoers ทุกเครื่องลง log, 0=พิมพ์เฉพาะสรุป
