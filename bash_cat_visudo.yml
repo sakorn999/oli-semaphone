@@ -12,7 +12,7 @@
 #     SHOW_FULL    (default 1) 1=พิมพ์เนื้อหา sudoers ทุกเครื่องลง log, 0=พิมพ์เฉพาะสรุป
 set -u
 
-RANGE="${TARGET_RANGE:-${TARGET_HOST:-10.100.1.1-10.100.1.50}}"
+RANGE="${TARGET_RANGE:-${TARGET_HOST:-10.100.1.51-10.100.1.99}}"
 USER_SSH="${TARGET_USER:-angel}"
 SHOW_FULL="${SHOW_FULL:-1}"
 OUT_DIR="./server_logs"
