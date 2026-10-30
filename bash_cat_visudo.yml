@@ -6,11 +6,15 @@
 #     DEPLOY_KEY      -> Key Store: Angel (ssh private key)
 #     DEPLOY_KEY_PASS -> Key Store: key แบบ "Login with password" เก็บ passphrase (ถ้า key มี passphrase)
 #   Environment (ไม่ลับ):
-#     TARGET_HOST (default 10.100.1.50), TARGET_USER (default angel)
+#     TARGET_RANGE (default 10.100.1.1-10.100.1.50)  รูปแบบ: 10.100.1.1-10.100.1.50 หรือ 10.100.1.1-50
+#                  หรือเครื่องเดียว 10.100.1.50 หรือหลายช่วงคั่นด้วยเว้นวรรค/คอมมา
+#     TARGET_USER  (default angel)
+#     SHOW_FULL    (default 1) 1=พิมพ์เนื้อหา sudoers ทุกเครื่องลง log, 0=พิมพ์เฉพาะสรุป
 set -u
 
-HOST="${TARGET_HOST:-10.100.1.50}"
+RANGE="${TARGET_RANGE:-${TARGET_HOST:-10.100.1.1-10.100.1.50}}"
 USER_SSH="${TARGET_USER:-angel}"
+SHOW_FULL="${SHOW_FULL:-1}"
 OUT_DIR="./server_logs"
 mkdir -p "$OUT_DIR"
 
@@ -92,60 +96,95 @@ SSH_OPTS=(-o BatchMode=yes
   -o StrictHostKeyChecking=no
   -o UserKnownHostsFile=/dev/null
   -o LogLevel=ERROR
-  -o ConnectTimeout=10)
-# เครื่องปลายทางเป็น OpenSSH 5.3 (เก่า) รองรับแค่ ssh-rsa/ssh-dss ส่วน client ใหม่ปิด ssh-rsa เป็นค่าเริ่มต้น
+  -o ConnectTimeout=5
+  -o PreferredAuthentications=publickey)
+# รองรับเครื่องเก่า (OpenSSH 5.3 รองรับแค่ ssh-rsa) -- ตัวเลือกแบบ "+" จึงไม่กระทบเครื่องใหม่
 SSH_OPTS+=(-o PubkeyAcceptedAlgorithms=+ssh-rsa
   -o HostKeyAlgorithms=+ssh-rsa
   -o KexAlgorithms=+diffie-hellman-group14-sha1,diffie-hellman-group-exchange-sha1)
 
-run_remote() {   # $1=คำสั่งบน remote  $2=ไฟล์ผลลัพธ์
-  ssh "${SSH_OPTS[@]}" "${USER_SSH}@${HOST}" "$1" > "$2" 2> "$2.err"
+# ---------- 4) แปลง range เป็นรายการ IP ----------
+expand_range() {
+  local item prefix s e i
+  for item in ${1//,/ }; do
+    if [[ "$item" =~ ^([0-9]+\.[0-9]+\.[0-9]+)\.([0-9]+)-([0-9]+\.[0-9]+\.[0-9]+\.)?([0-9]+)$ ]]; then
+      prefix="${BASH_REMATCH[1]}"; s="${BASH_REMATCH[2]}"; e="${BASH_REMATCH[4]}"
+      if [ -n "${BASH_REMATCH[3]}" ] && [ "${BASH_REMATCH[3]}" != "${prefix}." ]; then
+        echo "[ERROR] range ข้าม subnet ไม่รองรับ: $item (ต้องอยู่ใน /24 เดียวกัน)" >&2; return 1
+      fi
+      if [ "$s" -gt "$e" ] || [ "$e" -gt 255 ]; then echo "[ERROR] range ไม่ถูกต้อง: $item" >&2; return 1; fi
+      for ((i=s; i<=e; i++)); do echo "${prefix}.${i}"; done
+    elif [[ "$item" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+      echo "$item"
+    else
+      echo "[ERROR] รูปแบบ range ไม่ถูกต้อง: $item" >&2; return 1
+    fi
+  done
 }
 
-echo "=================================================="
-echo "Connecting to ${HOST} as ${USER_SSH}..."
-echo "=================================================="
+HOSTS="$(expand_range "$RANGE")" || exit 1
+TOTAL=$(echo "$HOSTS" | wc -l)
 
-if ! ssh "${SSH_OPTS[@]}" -o PreferredAuthentications=publickey "${USER_SSH}@${HOST}" "echo ok" >/dev/null 2>"$WORK/conn.err"; then
-  RC=$?
-  echo "[FAILED] SSH login ไม่สำเร็จ (exit code $RC)"
-  echo "--- ssh error ---"
-  cat "$WORK/conn.err"
-  echo "--- วินิจฉัย ---"
-  ssh -V 2>&1
-  echo "fingerprint ของ key ที่โหลดใน agent (เทียบกับ authorized_keys บน server):"
-  ssh-add -l
-  echo "ผล ssh -v (กรองเฉพาะบรรทัดสำคัญ):"
-  ssh -v "${SSH_OPTS[@]}" "${USER_SSH}@${HOST}" "echo ok" 2>&1 \
-    | grep -E "Connecting to|Connection (established|timed out|refused)|Offering|Server accepts|Authentications that can continue|Permission denied|no matching|Unable to negotiate|kex_exchange|banner|Host key|Authenticated" \
-    | head -30
-  echo "--- ทดสอบ port 22 ---"
-  (timeout 5 bash -c "</dev/tcp/${HOST}/22" && echo "port 22 เปิด") 2>&1 || echo "เชื่อมต่อ port 22 ไม่ได้ (firewall/เครือข่าย)"
-  exit 1
-fi
-echo "SSH login ... [OK]"
+run_remote() {   # $1=host $2=คำสั่งบน remote $3=ไฟล์ผลลัพธ์
+  ssh "${SSH_OPTS[@]}" "${USER_SSH}@$1" "$2" > "$3" 2> "$3.err"
+}
 
-report() {   # $1=ชื่อรายการ  $2=คำสั่ง  $3=ไฟล์ผลลัพธ์
-  if run_remote "$2" "$3"; then
-    echo
-    echo "=================== $1 ==================="
-    if [ -s "$3" ]; then cat "$3"; else echo "(ว่าง / ไม่มีข้อมูล)"; fi
-    echo "[OK] ($(wc -l < "$3") บรรทัด, เก็บไว้ที่ $3)"
+report() {   # $1=host $2=ชื่อรายการ $3=คำสั่ง $4=ไฟล์ผลลัพธ์
+  if run_remote "$1" "$3" "$4"; then
+    if [ "$SHOW_FULL" = "1" ]; then
+      echo "------ $2 ------"
+      if [ -s "$4" ]; then cat "$4"; else echo "(ว่าง / ไม่มีข้อมูล)"; fi
+    fi
+    echo "[OK] $2 ($(wc -l < "$4") บรรทัด)"
+    return 0
   else
-    echo "$1 ... [FAILED]"
-    sed 's/^/    /' "$3.err"
+    echo "[FAILED] $2"
+    sed 's/^/    /' "$4.err"
+    return 1
   fi
 }
 
-# สิทธิ์ sudo ของ user นี้ (ไม่ต้องใช้สิทธิ์พิเศษ)
-report "sudo -l (สิทธิ์ของ ${USER_SSH})" "sudo -n -l" "$OUT_DIR/${HOST}_sudo_l.txt"
-# เนื้อหา visudo
-report "/etc/sudoers" "sudo -n cat /etc/sudoers" "$OUT_DIR/${HOST}_sudoers.txt"
-report "/etc/sudoers.d/*" "sudo -n sh -c 'for f in /etc/sudoers.d/*; do [ -f \"\$f\" ] && { echo \"### \$f\"; cat \"\$f\"; }; done; true'" "$OUT_DIR/${HOST}_sudoers_d.txt"
-# ตรวจ syntax ของ sudoers
-report "visudo -c" "sudo -n visudo -c" "$OUT_DIR/${HOST}_visudo_check.txt"
-# user/group ที่ได้สิทธิ์ admin
-report "groups ของ ${USER_SSH}" "id ${USER_SSH}" "$OUT_DIR/${HOST}_id.txt"
+check_host() {   # คืนค่า 0=ok, 1=ssh/sudo มีปัญหา, 2=เชื่อมต่อไม่ได้
+  local h="$1" d="$OUT_DIR/$1"
+  mkdir -p "$d"
+  # ทดสอบ port 22 ก่อน เพื่อไม่เสียเวลากับเครื่องที่ไม่มีอยู่
+  if ! (timeout 3 bash -c "</dev/tcp/${h}/22") 2>/dev/null; then
+    echo "[SKIP] port 22 ปิด/ไม่ตอบสนอง"; return 2
+  fi
+  if ! ssh "${SSH_OPTS[@]}" "${USER_SSH}@${h}" "echo ok" >/dev/null 2>"$WORK/conn.err"; then
+    echo "[FAILED] SSH login ไม่สำเร็จ:"
+    sed 's/^/    /' "$WORK/conn.err" | head -5
+    return 1
+  fi
+  echo "SSH login ... [OK]"
+  local rc=0
+  report "$h" "sudo -l (สิทธิ์ของ ${USER_SSH})" "sudo -n -l" "$d/sudo_l.txt" || rc=1
+  report "$h" "/etc/sudoers" "sudo -n cat /etc/sudoers" "$d/sudoers.txt" || rc=1
+  report "$h" "/etc/sudoers.d/*" "sudo -n sh -c 'for f in /etc/sudoers.d/*; do [ -f \"\$f\" ] && { echo \"### \$f\"; cat \"\$f\"; }; done; true'" "$d/sudoers_d.txt" || rc=1
+  report "$h" "visudo -c" "sudo -n visudo -c" "$d/visudo_check.txt" || rc=1
+  report "$h" "id ${USER_SSH}" "id ${USER_SSH}" "$d/id.txt" || rc=1
+  return $rc
+}
+
+OK_LIST=(); FAIL_LIST=(); SKIP_COUNT=0; n=0
+echo "เป้าหมาย: $RANGE ($TOTAL เครื่อง) user: $USER_SSH"
+for h in $HOSTS; do
+  n=$((n+1))
+  echo
+  echo "=================== [$n/$TOTAL] $h ==================="
+  check_host "$h"; rc=$?
+  case $rc in
+    0) OK_LIST+=("$h") ;;
+    2) SKIP_COUNT=$((SKIP_COUNT+1)) ;;
+    *) FAIL_LIST+=("$h") ;;
+  esac
+done
 
 echo
-echo "=================== เสร็จสิ้น ==================="
+echo "=================== สรุปผล ==================="
+echo "ทั้งหมด: $TOTAL | สำเร็จ: ${#OK_LIST[@]} | มีปัญหา: ${#FAIL_LIST[@]} | ข้าม (port 22 ปิด): $SKIP_COUNT"
+[ ${#OK_LIST[@]} -gt 0 ]   && echo "สำเร็จ: ${OK_LIST[*]}"
+[ ${#FAIL_LIST[@]} -gt 0 ] && echo "มีปัญหา: ${FAIL_LIST[*]}"
+echo "ไฟล์ผลลัพธ์: $OUT_DIR/<ip>/"
+# ล้มเหลวก็ต่อเมื่อไม่มีเครื่องไหนสำเร็จเลย
+[ ${#OK_LIST[@]} -gt 0 ] || exit 1
